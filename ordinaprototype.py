@@ -11,14 +11,15 @@ from datetime import timedelta, datetime
 import re
 
 #load in machine learned trained model: Random Forest classifier.
-model = pickle.load(open("Alexandra_model.sav", 'rb'))
-#model = pickle.load(open("svc_model.sav", 'rb'))
+#model = pickle.load(open("Alexandra_model.sav", 'rb'))
+model = pickle.load(open("knnc.sav", 'rb'))
 #Load in stationNumbers, this is used to select the stations.
 stationNumbers = pd.read_csv("stationNumbers2.csv", usecols = ["index", "FullName", "StationCode", "id"])
 #the loaded in model to train uses traintypes, like sprinter, labelencoded. This returns the types of the trains
 #so that they can be used to make predictions on the model.
 trainTypeNumbers = pd.read_csv("trainTypesNumbers.csv", usecols = ["0"])
 snow = 3
+predText = []
 st.write("""
 # Prototype Ordina choosing best travel option.
 """)
@@ -63,10 +64,12 @@ def getRoute(startstation, endstation, datetime):
         return "", "", "", "", "", ""
     for i in range (len(trip['trips'][0]['legs'])):
             stations.append(trip['trips'][0]['legs'][i]['origin']['name'])
-            tracks.append(trip['trips'][0]['legs'][i]['origin']['plannedTrack'])
+            if 'plannedTrack' in trip['trips'][0]['legs'][i]['origin']:
+                tracks.append(trip['trips'][0]['legs'][i]['origin']['plannedTrack'])
             times.append(str(iso8601.parse_date(trip['trips'][0]['legs'][i]['origin']['plannedDateTime'])-timedelta(hours = 2)))
             stations.append(trip['trips'][0]['legs'][i]['destination']['name'])
-            tracks.append(trip['trips'][0]['legs'][i]['destination']['plannedTrack'])
+            if 'plannedTrack' in trip['trips'][0]['legs'][i]['destination']:
+                tracks.append(trip['trips'][0]['legs'][i]['destination']['plannedTrack'])
             times.append(str(iso8601.parse_date(trip['trips'][0]['legs'][i]['destination']['plannedDateTime'])-timedelta(hours = 2)))
             operators.append(trip['trips'][0]['legs'][i]['product']['operatorName'])
             types.append(trip['trips'][0]['legs'][i]['product']['longCategoryName'])
@@ -189,8 +192,8 @@ def user_input_features(newArrshort = "0", newDepshort = "0", departure = '0', d
     hour = int(hour)
     fitarray = []
     predtest = []
-    Detours = int(len(tracks)/2)
-    if snow == 3 or departureshort == destinationshort or len(tracks) == 0 or types == "":
+    Detours = int(len(times)/2)
+    if snow == 3 or departureshort == destinationshort or len(times) == 0 or types == "":
         noWeatherMessage = "No Weatherdata, no prediction"
         prediction = []
         for i in range(0, Detours):
@@ -209,26 +212,38 @@ def user_input_features(newArrshort = "0", newDepshort = "0", departure = '0', d
             city = stationNumbers[stationNumbers["index"]==stationInt]["id"].values[0].astype(str)
 
             direct, windspeed, gust, temp, humidity, pressure, hourrain, rain, snow = getweather(city[:7], weatherdate)
+            #"StationCode", "Vervoerder", "ReisInformatieTijdstip", "LangeNaam", "Hourly sum of the rain"
             #"RitDatum", "StationCode", "Vervoerder", "Station", "ReisInformatieTijdstip", "LangeNaam", "Hourly sum of the rain"
-            tofit = [stationInt, operint, typeInt, re.search(r'\d+', tracks[int(i/2)]).group(), hour, hour, direct, windspeed, gust, temp, hourrain, pressure, humidity, rain, snow, 1]
-            #tofit = [10, operint, 3, 1, hour, hour, direct, windspeed, gust, temp, hourrain, pressure, humidity, rain, snow, 1]
+            #tofit = [stationInt, operint, typeInt, re.search(r'\d+', tracks[int(i/2)]).group(), hour, hour, direct, windspeed, gust, temp, hourrain, pressure, humidity, rain, snow, 1]
+            testdate = year+month+day+str(hour)+minute+"000000"
+            tofit = [stationInt, operint, testdate, stationInt, hourrain]
+
             fitarray.append(tofit)
             #fitarray = [[10, operint, 3, tracks[0], hour, hour, direct, windspeed, gust, temp, hourrain, pressure, humidity, rain, snow, 1]]
         prediction = model.predict(fitarray)
 
-        for i in range(0, Detours-1):
-            if prediction[i] == "In Time":
+        #2: No Delay
+        #3: Small Delay
+        #1: Medium Delay
+        #0: Big Delay
+        for j in range(0, len(prediction)):
+            if prediction[j] == 2:
                 predappend = dt.timedelta(minutes = 0)
-            elif prediction[i] == "Small Delay":
+                predText.append("No Delay")
+            elif prediction[j] == 3:
                 predappend = dt.timedelta(minutes = 5)
-            elif prediction[i] == "Medium Delay":
+                predText.append("Small Delay")
+            elif prediction[j] == 1:
                 predappend = dt.timedelta(minutes = 15)
+                predText.append("Medium Delay")
             else:
-                predappend = dt.timedelta(minutes = 15)
-            if datetime.strptime(times[i*2+1][:19], '%Y-%m-%d %H:%M:%S')+predappend > datetime.strptime(times[i*2+2][:19], '%Y-%m-%d %H:%M:%S'):
-                newDepshort = stationNumbers[stationNumbers["FullName"]==stations[i*2+1]]["StationCode"].values[0]
-                newArrshort = stationNumbers[stationNumbers["FullName"]==stations[-1]]["StationCode"].values[0]
-                user_input_features(newArrshort, newDepshort, departure, destination, date5, hour, minute)
+                predappend = dt.timedelta(minutes = 0)
+                predText.append("error")
+            if j != len(prediction)-1:
+                if datetime.strptime(times[j*2+1][:19], '%Y-%m-%d %H:%M:%S')+predappend > datetime.strptime(times[j*2+2][:19], '%Y-%m-%d %H:%M:%S'):
+                    newDepshort = stationNumbers[stationNumbers["FullName"]==stations[j*2+1]]["StationCode"].values[0]
+                    newArrshort = stationNumbers[stationNumbers["FullName"]==stations[-1]]["StationCode"].values[0]
+                    user_input_features(newArrshort, newDepshort, departure, destination, date5, hour, minute)
 
     if departure == destination or types =="":
         totalTime = 0
@@ -244,7 +259,7 @@ def user_input_features(newArrshort = "0", newDepshort = "0", departure = '0', d
             'Total Time': str(totalTime)
             }
     route_features = pd.DataFrame(list(zip(stations, times, tracks)), columns =["Station", "Time", "Track"])
-    pred_df = pd.DataFrame(list(zip(prediction)), columns = ["Prediction"])
+    pred_df = pd.DataFrame(predText, columns = ["Prediction"])
     route_info = pd.DataFrame(list(zip(operators, types, crowds)), columns = ["Operator", "Train Type", "crowds"])
     features = pd.DataFrame(data, index=[0])
     return features, route_features, route_info, pred_df
